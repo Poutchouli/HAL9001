@@ -62,12 +62,9 @@ async def setup_database():
     """
     logger.info("Setting up database...")
     async with get_db_connection() as conn:
-        # Import database module to check if using SQLite
-        from database import USE_SQLITE
-        
-        if USE_SQLITE:
-            # SQLite operations
-            await conn.execute("""
+        async with conn.cursor() as cur:
+            # Create users table
+            await cur.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -78,7 +75,7 @@ async def setup_database():
             logger.info("Users table created or exists.")
 
             # Create the permissions table
-            await conn.execute("""
+            await cur.execute("""
                 CREATE TABLE IF NOT EXISTS user_table_permissions (
                     user_id TEXT NOT NULL,
                     table_name TEXT NOT NULL,
@@ -92,28 +89,27 @@ async def setup_database():
             logger.info("Permissions table created or exists.")
 
             # Check if tables are empty
-            result = await conn.execute("SELECT COUNT(*) FROM users")
-            row = await result.fetchone()
-            count = row[0] if row else 0
-            is_empty = count == 0
+            await cur.execute("SELECT COUNT(*) FROM users")
+            result = await cur.fetchone()
+            is_empty = result[0] == 0 if result else True
 
             if is_empty:
                 logger.info("Database is empty. Populating with initial mock data...")
                 # Populate users table
                 for user in MOCK_USERS:
-                    await conn.execute("""
-                        INSERT OR IGNORE INTO users (id, name, role, email)
-                        VALUES (?, ?, ?, ?)
+                    await cur.execute("""
+                        INSERT INTO users (id, name, role, email)
+                        VALUES (%s, %s, %s, %s) ON CONFLICT (id) DO NOTHING;
                     """, (user['id'], user['name'], user['role'], user['email']))
                 logger.info(f"Populated users table with {len(MOCK_USERS)} users.")
 
                 # Populate permissions table
                 for user_id, perms in MOCK_INITIAL_PERMISSIONS.items():
                     for table_name, actions in perms.items():
-                        await conn.execute("""
+                        await cur.execute("""
                             INSERT INTO user_table_permissions
                             (user_id, table_name, can_select, can_insert, can_update, can_delete)
-                            VALUES (?, ?, ?, ?, ?, ?)
+                            VALUES (%s, %s, %s, %s, %s, %s);
                         """, (
                             user_id, table_name,
                             actions.get('can_select', False),
@@ -124,69 +120,8 @@ async def setup_database():
                 logger.info("Populated permissions table.")
             else:
                 logger.info("Database already contains data. Skipping initial population.")
-                
+
             await conn.commit()
-        else:
-            # PostgreSQL operations
-            async with conn.cursor() as cur:
-                # Create users table
-                await cur.execute("""
-                    CREATE TABLE IF NOT EXISTS users (
-                        id TEXT PRIMARY KEY,
-                        name TEXT NOT NULL,
-                        role TEXT NOT NULL,
-                        email TEXT UNIQUE NOT NULL
-                    );
-                """)
-                logger.info("Users table created or exists.")
-
-                # Create the permissions table
-                await cur.execute("""
-                    CREATE TABLE IF NOT EXISTS user_table_permissions (
-                        user_id TEXT NOT NULL,
-                        table_name TEXT NOT NULL,
-                        can_select BOOLEAN DEFAULT FALSE,
-                        can_insert BOOLEAN DEFAULT FALSE,
-                        can_update BOOLEAN DEFAULT FALSE,
-                        can_delete BOOLEAN DEFAULT FALSE,
-                        PRIMARY KEY(user_id, table_name)
-                    );
-                """)
-                logger.info("Permissions table created or exists.")
-
-                # Check if tables are empty
-                await cur.execute("SELECT 1 FROM users LIMIT 1;")
-                is_empty = await cur.fetchone() is None
-
-                if is_empty:
-                    logger.info("Database is empty. Populating with initial mock data...")
-                    # Populate users table
-                    for user in MOCK_USERS:
-                        await cur.execute("""
-                            INSERT INTO users (id, name, role, email)
-                            VALUES (%s, %s, %s, %s);
-                        """, (user['id'], user['name'], user['role'], user['email']))
-                    logger.info(f"Populated users table with {len(MOCK_USERS)} users.")
-
-                    # Populate permissions table
-                    for user_id, perms in MOCK_INITIAL_PERMISSIONS.items():
-                        for table_name, actions in perms.items():
-                            await cur.execute("""
-                                INSERT INTO user_table_permissions
-                                (user_id, table_name, can_select, can_insert, can_update, can_delete)
-                                VALUES (%s, %s, %s, %s, %s, %s);
-                            """, (
-                                user_id, table_name,
-                                actions.get('can_select', False),
-                                actions.get('can_insert', False),
-                                actions.get('can_update', False),
-                                actions.get('can_delete', False)
-                            ))
-                    logger.info("Populated permissions table.")
-                else:
-                    logger.info("Database already contains data. Skipping initial population.")
-
-                await conn.commit()
     logger.info("Database setup complete.")
 
 
@@ -232,12 +167,13 @@ async def health_check():
 
 
 @app.get("/api/v1/admin/users", tags=["Admin"], summary="Get All Users")
-async def get_all_users(conn=Depends(get_db_connection)):
+async def get_all_users():
     """Retrieves a list of all users from the database."""
-    async with conn.cursor(row_factory=dict_row) as cur:
-        await cur.execute("SELECT id, name, role, email FROM users ORDER BY name;")
-        users = await cur.fetchall()
-        return users
+    async with get_db_connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute("SELECT id, name, role, email FROM users ORDER BY name;")
+            users = await cur.fetchall()
+            return users
 
 @app.get("/api/v1/admin/tables", tags=["Admin"], summary="Get All Managed Tables")
 async def get_all_tables():
@@ -245,61 +181,63 @@ async def get_all_tables():
     return MOCK_TABLES
 
 @app.get("/api/v1/admin/permissions/{user_id}", tags=["Admin"], summary="Get Permissions for a User")
-async def get_user_permissions(user_id: str, conn=Depends(get_db_connection)):
+async def get_user_permissions(user_id: str):
     """
     Retrieves a map of table permissions for a specific user.
     """
-    async with conn.cursor(row_factory=dict_row) as cur:
-        await cur.execute(
-            "SELECT table_name, can_select, can_insert, can_update, can_delete FROM user_table_permissions WHERE user_id = %s;",
-            (user_id,)
-        )
-        permissions = {}
-        records = await cur.fetchall()
-        for record in records:
-            permissions[record['table_name']] = {
-                "can_select": record['can_select'],
-                "can_insert": record['can_insert'],
-                "can_update": record['can_update'],
-                "can_delete": record['can_delete'],
-            }
-        return permissions
+    async with get_db_connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                "SELECT table_name, can_select, can_insert, can_update, can_delete FROM user_table_permissions WHERE user_id = %s;",
+                (user_id,)
+            )
+            permissions = {}
+            records = await cur.fetchall()
+            for record in records:
+                permissions[record['table_name']] = {
+                    "can_select": record['can_select'],
+                    "can_insert": record['can_insert'],
+                    "can_update": record['can_update'],
+                    "can_delete": record['can_delete'],
+                }
+            return permissions
 
 @app.post("/api/v1/admin/permissions", tags=["Admin"], summary="Update User Permissions")
-async def update_user_permissions(update: PermissionUpdate, conn=Depends(get_db_connection)):
+async def update_user_permissions(update: PermissionUpdate):
     """
     Updates permissions for a specific user.
     """
-    async with conn.cursor() as cur:
-        # First, delete existing permissions for this user
-        await cur.execute(
-            "DELETE FROM user_table_permissions WHERE user_id = %s;",
-            (update.user_id,)
-        )
-        
-        # Insert new permissions
-        for table_name, perms in update.permissions.items():
-            await cur.execute("""
-                INSERT INTO user_table_permissions
-                (user_id, table_name, can_select, can_insert, can_update, can_delete)
-                VALUES (%s, %s, %s, %s, %s, %s);
-            """, (
-                update.user_id, 
-                table_name,
-                perms.get('can_select', False),
-                perms.get('can_insert', False),
-                perms.get('can_update', False),
-                perms.get('can_delete', False)
-            ))
-        
-        await conn.commit()
-        
-        return {
-            "status": "success", 
-            "message": f"Permissions updated for user {update.user_id}",
-            "user_id": update.user_id,
-            "updated_tables": list(update.permissions.keys())
-        }
+    async with get_db_connection() as conn:
+        async with conn.cursor() as cur:
+            # First, delete existing permissions for this user
+            await cur.execute(
+                "DELETE FROM user_table_permissions WHERE user_id = %s;",
+                (update.user_id,)
+            )
+            
+            # Insert new permissions
+            for table_name, perms in update.permissions.items():
+                await cur.execute("""
+                    INSERT INTO user_table_permissions
+                    (user_id, table_name, can_select, can_insert, can_update, can_delete)
+                    VALUES (%s, %s, %s, %s, %s, %s);
+                """, (
+                    update.user_id, 
+                    table_name,
+                    perms.get('can_select', False),
+                    perms.get('can_insert', False),
+                    perms.get('can_update', False),
+                    perms.get('can_delete', False)
+                ))
+            
+            await conn.commit()
+            
+            return {
+                "status": "success", 
+                "message": f"Permissions updated for user {update.user_id}",
+                "user_id": update.user_id,
+                "updated_tables": list(update.permissions.keys())
+            }
 
 
 # --- SERVER BOOTSTRAP ---

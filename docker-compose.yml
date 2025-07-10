@@ -13,7 +13,6 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U hal_user -d hal9001_db"]
@@ -42,14 +41,14 @@ services:
       - ./hal9001-backend:/app
     networks:
       - hal9001-network
-      - webportal-network  # External network for web portal integration
+      #- webportal-network  # External network for web portal integration
     restart: unless-stopped
 
 networks:
   hal9001-network:
     driver: bridge
-  webportal-network:
-    external: true  # Connect to existing web portal network
+  #webportal-network:
+   # external: true  # Connect to existing web portal network
     
 volumes:
   postgres_data:

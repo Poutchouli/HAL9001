@@ -1,6 +1,4 @@
 import os
-import asyncio
-import aiosqlite
 from dotenv import load_dotenv
 import psycopg
 from psycopg_pool import AsyncConnectionPool
@@ -12,45 +10,20 @@ load_dotenv()
 
 # --- DATABASE CONNECTION SETUP ---
 DATABASE_URL = os.getenv("DATABASE_URL")
-USE_SQLITE = not DATABASE_URL or DATABASE_URL.startswith("sqlite")
-pool: Optional[AsyncConnectionPool] = None
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL environment variable is required")
 
-if USE_SQLITE:
-    # SQLite fallback for local testing
-    SQLITE_DB_PATH = "hal9001_local.db"
-    print(f"Using SQLite database: {SQLITE_DB_PATH}")
-else:
-    # PostgreSQL async connection pool
-    if DATABASE_URL:
-        try:
-            pool = AsyncConnectionPool(conninfo=DATABASE_URL, min_size=2, max_size=10)
-            print(f"Using PostgreSQL database: {DATABASE_URL}")
-        except Exception as e:
-            print(f"Failed to create PostgreSQL pool: {e}")
-            USE_SQLITE = True
-            SQLITE_DB_PATH = "hal9001_local.db"
-            print(f"Falling back to SQLite: {SQLITE_DB_PATH}")
-            pool = None
-    else:
-        USE_SQLITE = True
-        SQLITE_DB_PATH = "hal9001_local.db"
-        print(f"No DATABASE_URL found, using SQLite: {SQLITE_DB_PATH}")
+# PostgreSQL async connection pool
+try:
+    pool = AsyncConnectionPool(conninfo=DATABASE_URL, min_size=2, max_size=10)
+    print(f"Using PostgreSQL database: {DATABASE_URL}")
+except Exception as e:
+    raise RuntimeError(f"Failed to create PostgreSQL pool: {e}")
 
 @asynccontextmanager
 async def get_db_connection():
     """
-    A context manager to get a database connection.
-    Uses SQLite for local testing or PostgreSQL for production.
+    A context manager to get a PostgreSQL database connection.
     """
-    if USE_SQLITE:
-        conn = await aiosqlite.connect(SQLITE_DB_PATH)
-        conn.row_factory = aiosqlite.Row
-        try:
-            yield conn
-        finally:
-            await conn.close()
-    else:
-        if pool is None:
-            raise RuntimeError("PostgreSQL pool not initialized")
-        async with pool.connection() as conn:
-            yield conn
+    async with pool.connection() as conn:
+        yield conn
