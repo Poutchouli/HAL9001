@@ -1,3 +1,4 @@
+import os
 import uvicorn
 import logging
 from fastapi import FastAPI, Depends, HTTPException, status
@@ -7,6 +8,21 @@ from contextlib import asynccontextmanager
 from database import get_db_connection
 from psycopg.rows import dict_row
 from pydantic import BaseModel
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Configuration from environment
+API_HOST = os.getenv("API_HOST", "0.0.0.0")
+API_PORT = int(os.getenv("API_PORT", "8000"))
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
+DEBUG = os.getenv("DEBUG", "false").lower() == "true"
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
+# Configure logging
+logging.basicConfig(level=getattr(logging, LOG_LEVEL))
+logger = logging.getLogger(__name__)
 
 # --- MOCK DATA FOR INITIAL SETUP (from UI.html) ---
 MOCK_USERS = [
@@ -44,11 +60,14 @@ async def setup_database():
     Function to create tables and populate them with initial mock data.
     This function is called once when the application starts.
     """
-    print("Setting up database...")
+    logger.info("Setting up database...")
     async with get_db_connection() as conn:
-        async with conn.cursor() as cur:
-            # Create users table
-            await cur.execute("""
+        # Import database module to check if using SQLite
+        from database import USE_SQLITE
+        
+        if USE_SQLITE:
+            # SQLite operations
+            await conn.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -56,10 +75,10 @@ async def setup_database():
                     email TEXT UNIQUE NOT NULL
                 );
             """)
-            print("Users table created or exists.")
+            logger.info("Users table created or exists.")
 
-            # Create the permissions table as defined in the blueprint
-            await cur.execute("""
+            # Create the permissions table
+            await conn.execute("""
                 CREATE TABLE IF NOT EXISTS user_table_permissions (
                     user_id TEXT NOT NULL,
                     table_name TEXT NOT NULL,
@@ -70,35 +89,105 @@ async def setup_database():
                     PRIMARY KEY(user_id, table_name)
                 );
             """)
-            print("Permissions table created or exists.")
+            logger.info("Permissions table created or exists.")
 
-            # Populate users table (ignore conflicts if already exists)
-            for user in MOCK_USERS:
-                await cur.execute("""
-                    INSERT INTO users (id, name, role, email)
-                    VALUES (%s, %s, %s, %s) ON CONFLICT (id) DO NOTHING;
-                """, (user['id'], user['name'], user['role'], user['email']))
-            print(f"Populated users table with {len(MOCK_USERS)} users.")
+            # Check if tables are empty
+            result = await conn.execute("SELECT COUNT(*) FROM users")
+            row = await result.fetchone()
+            count = row[0] if row else 0
+            is_empty = count == 0
 
-            # Populate permissions table
-            # Clear existing permissions to ensure a clean slate on restart
-            await cur.execute("DELETE FROM user_table_permissions;")
-            for user_id, perms in MOCK_INITIAL_PERMISSIONS.items():
-                for table_name, actions in perms.items():
-                    await cur.execute("""
-                        INSERT INTO user_table_permissions
-                        (user_id, table_name, can_select, can_insert, can_update, can_delete)
-                        VALUES (%s, %s, %s, %s, %s, %s);
-                    """, (
-                        user_id, table_name,
-                        actions.get('can_select', False),
-                        actions.get('can_insert', False),
-                        actions.get('can_update', False),
-                        actions.get('can_delete', False)
-                    ))
-            print("Populated permissions table.")
+            if is_empty:
+                logger.info("Database is empty. Populating with initial mock data...")
+                # Populate users table
+                for user in MOCK_USERS:
+                    await conn.execute("""
+                        INSERT OR IGNORE INTO users (id, name, role, email)
+                        VALUES (?, ?, ?, ?)
+                    """, (user['id'], user['name'], user['role'], user['email']))
+                logger.info(f"Populated users table with {len(MOCK_USERS)} users.")
+
+                # Populate permissions table
+                for user_id, perms in MOCK_INITIAL_PERMISSIONS.items():
+                    for table_name, actions in perms.items():
+                        await conn.execute("""
+                            INSERT INTO user_table_permissions
+                            (user_id, table_name, can_select, can_insert, can_update, can_delete)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, (
+                            user_id, table_name,
+                            actions.get('can_select', False),
+                            actions.get('can_insert', False),
+                            actions.get('can_update', False),
+                            actions.get('can_delete', False)
+                        ))
+                logger.info("Populated permissions table.")
+            else:
+                logger.info("Database already contains data. Skipping initial population.")
+                
             await conn.commit()
-    print("Database setup complete.")
+        else:
+            # PostgreSQL operations
+            async with conn.cursor() as cur:
+                # Create users table
+                await cur.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        role TEXT NOT NULL,
+                        email TEXT UNIQUE NOT NULL
+                    );
+                """)
+                logger.info("Users table created or exists.")
+
+                # Create the permissions table
+                await cur.execute("""
+                    CREATE TABLE IF NOT EXISTS user_table_permissions (
+                        user_id TEXT NOT NULL,
+                        table_name TEXT NOT NULL,
+                        can_select BOOLEAN DEFAULT FALSE,
+                        can_insert BOOLEAN DEFAULT FALSE,
+                        can_update BOOLEAN DEFAULT FALSE,
+                        can_delete BOOLEAN DEFAULT FALSE,
+                        PRIMARY KEY(user_id, table_name)
+                    );
+                """)
+                logger.info("Permissions table created or exists.")
+
+                # Check if tables are empty
+                await cur.execute("SELECT 1 FROM users LIMIT 1;")
+                is_empty = await cur.fetchone() is None
+
+                if is_empty:
+                    logger.info("Database is empty. Populating with initial mock data...")
+                    # Populate users table
+                    for user in MOCK_USERS:
+                        await cur.execute("""
+                            INSERT INTO users (id, name, role, email)
+                            VALUES (%s, %s, %s, %s);
+                        """, (user['id'], user['name'], user['role'], user['email']))
+                    logger.info(f"Populated users table with {len(MOCK_USERS)} users.")
+
+                    # Populate permissions table
+                    for user_id, perms in MOCK_INITIAL_PERMISSIONS.items():
+                        for table_name, actions in perms.items():
+                            await cur.execute("""
+                                INSERT INTO user_table_permissions
+                                (user_id, table_name, can_select, can_insert, can_update, can_delete)
+                                VALUES (%s, %s, %s, %s, %s, %s);
+                            """, (
+                                user_id, table_name,
+                                actions.get('can_select', False),
+                                actions.get('can_insert', False),
+                                actions.get('can_update', False),
+                                actions.get('can_delete', False)
+                            ))
+                    logger.info("Populated permissions table.")
+                else:
+                    logger.info("Database already contains data. Skipping initial population.")
+
+                await conn.commit()
+    logger.info("Database setup complete.")
 
 
 # --- LIFESPAN MANAGEMENT ---
@@ -122,7 +211,7 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins
+    allow_origins=CORS_ORIGINS,  # Configured via environment variable
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -215,4 +304,10 @@ async def update_user_permissions(update: PermissionUpdate, conn=Depends(get_db_
 
 # --- SERVER BOOTSTRAP ---
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "main:app", 
+        host=API_HOST, 
+        port=API_PORT, 
+        reload=DEBUG,
+        log_level=LOG_LEVEL.lower()
+    )

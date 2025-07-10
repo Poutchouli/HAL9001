@@ -25,7 +25,7 @@ HAL9001 is a FastAPI-based application that provides user and table permissions 
 ### Prerequisites
 
 - Python 3.8+
-- PostgreSQL database
+- Docker and Docker Compose
 - pip (Python package manager)
 
 ### Installation
@@ -36,7 +36,16 @@ git clone https://github.com/yourusername/HAL9001.git
 cd HAL9001
 ```
 
-2. Create and activate a virtual environment:
+2. Start PostgreSQL with Docker:
+```bash
+# Using PowerShell (Windows)
+.\docker-db.ps1 -Action start
+
+# Or using Docker Compose directly
+docker-compose up -d postgres
+```
+
+3. Create and activate a virtual environment:
 ```bash
 python -m venv .venv
 # On Windows:
@@ -45,7 +54,7 @@ python -m venv .venv
 source .venv/bin/activate
 ```
 
-3. Install dependencies:
+4. Install dependencies:
 ```bash
 cd hal9001-backend
 pip install -r requirements.txt

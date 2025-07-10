@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: hal9001-postgres
+    environment:
+      POSTGRES_DB: hal9001_db
+      POSTGRES_USER: hal_user
+      POSTGRES_PASSWORD: supersecret
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hal_user -d hal9001_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - hal9001-network
+
+  hal9001-api:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: hal9001-api
+    environment:
+      - DATABASE_URL=postgresql://hal_user:supersecret@postgres:5432/hal9001_db
+      - CORS_ORIGINS=*
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./hal9001-backend:/app
+    networks:
+      - hal9001-network
+      - webportal-network  # External network for web portal integration
+    restart: unless-stopped
+
+networks:
+  hal9001-network:
+    driver: bridge
+  webportal-network:
+    external: true  # Connect to existing web portal network
+    
+volumes:
+  postgres_data:
