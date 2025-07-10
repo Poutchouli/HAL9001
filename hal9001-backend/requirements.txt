@@ -1,0 +1,9 @@
+# Web server
+fastapi
+uvicorn[standard]
+
+# PostgreSQL database driver (async)
+psycopg[binary,pool]
+
+# For reading .env files
+python-dotenv
