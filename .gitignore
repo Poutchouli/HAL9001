@@ -161,10 +161,27 @@ dmypy.json
 # VS Code
 .vscode/
 
-# Database files
+# Test and temporary files
+*_test.*
+*_fixed.*
+test_*.json
+*.test.*
+hal9001_test.db
+temp_*
+*.tmp
+
+# UI test files
+UI_test.html
+UI_fixed.html
+
+# Test files and databases
 *.db
 *.sqlite
 *.sqlite3
+test_*.json
+*_test.py
+*_test.html
+*_fixed.html
 
 # OS generated files
 .DS_Store

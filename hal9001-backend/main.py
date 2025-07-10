@@ -1,10 +1,12 @@
 import uvicorn
 import logging
 from fastapi import FastAPI, Depends, HTTPException, status
-from typing import List
+from fastapi.middleware.cors import CORSMiddleware
+from typing import List, Dict
 from contextlib import asynccontextmanager
 from database import get_db_connection
 from psycopg.rows import dict_row
+from pydantic import BaseModel
 
 # --- MOCK DATA FOR INITIAL SETUP (from UI.html) ---
 MOCK_USERS = [
@@ -117,6 +119,21 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with specific origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# --- Pydantic models for request validation ---
+class PermissionUpdate(BaseModel):
+    user_id: str
+    permissions: Dict[str, Dict[str, bool]]
+
 
 # --- API ENDPOINTS ---
 @app.get("/api/health", tags=["System"])
@@ -159,7 +176,41 @@ async def get_user_permissions(user_id: str, conn=Depends(get_db_connection)):
             }
         return permissions
 
-# ... We will add the POST endpoint next ...
+@app.post("/api/v1/admin/permissions", tags=["Admin"], summary="Update User Permissions")
+async def update_user_permissions(update: PermissionUpdate, conn=Depends(get_db_connection)):
+    """
+    Updates permissions for a specific user.
+    """
+    async with conn.cursor() as cur:
+        # First, delete existing permissions for this user
+        await cur.execute(
+            "DELETE FROM user_table_permissions WHERE user_id = %s;",
+            (update.user_id,)
+        )
+        
+        # Insert new permissions
+        for table_name, perms in update.permissions.items():
+            await cur.execute("""
+                INSERT INTO user_table_permissions
+                (user_id, table_name, can_select, can_insert, can_update, can_delete)
+                VALUES (%s, %s, %s, %s, %s, %s);
+            """, (
+                update.user_id, 
+                table_name,
+                perms.get('can_select', False),
+                perms.get('can_insert', False),
+                perms.get('can_update', False),
+                perms.get('can_delete', False)
+            ))
+        
+        await conn.commit()
+        
+        return {
+            "status": "success", 
+            "message": f"Permissions updated for user {update.user_id}",
+            "user_id": update.user_id,
+            "updated_tables": list(update.permissions.keys())
+        }
 
 
 # --- SERVER BOOTSTRAP ---
