@@ -26,12 +26,9 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 logging.basicConfig(level=getattr(logging, LOG_LEVEL))
 logger = logging.getLogger(__name__)
 
-# --- MOCK DATA FOR INITIAL SETUP (from UI.html) ---
+# --- MOCK DATA FOR INITIAL SETUP ---
 MOCK_USERS = [
-  {'id': 'usr_001', 'name': 'Dave Bowman', 'role': 'Data Editor', 'email': 'd.bowman@discovery.co'},
-  {'id': 'usr_002', 'name': 'Frank Poole', 'role': 'Data Viewer', 'email': 'f.poole@discovery.co'},
-  {'id': 'usr_003', 'name': 'Admin User', 'role': 'Tenant Admin', 'email': 'admin@discovery.co'},
-  {'id': 'usr_004', 'name': 'System Architect', 'role': 'System Admin', 'email': 'sysarch@system.co'},
+  {'id': 'admin', 'name': 'Administrator', 'role': 'System Admin', 'email': 'admin'},
 ]
 
 MOCK_TABLES = [
@@ -40,19 +37,12 @@ MOCK_TABLES = [
 ]
 
 MOCK_INITIAL_PERMISSIONS = {
-  'usr_001': {
-    'crew_vitals_log': {'can_select': True, 'can_insert': True, 'can_update': True, 'can_delete': False},
-    'pod_bay_doors_status': {'can_select': True, 'can_insert': True, 'can_update': True, 'can_delete': False},
-    'discovery_one_systems': {'can_select': True, 'can_insert': False, 'can_update': False, 'can_delete': False},
-  },
-  'usr_002': {
-    'crew_vitals_log': {'can_select': True, 'can_insert': False, 'can_update': False, 'can_delete': False},
-    'discovery_one_systems': {'can_select': True, 'can_insert': False, 'can_update': False, 'can_delete': False},
-  },
-  'usr_003': {
+  'admin': {
     'crew_vitals_log': {'can_select': True, 'can_insert': True, 'can_update': True, 'can_delete': True},
     'pod_bay_doors_status': {'can_select': True, 'can_insert': True, 'can_update': True, 'can_delete': True},
     'discovery_one_systems': {'can_select': True, 'can_insert': True, 'can_update': True, 'can_delete': True},
+    'monolith_observations_secure': {'can_select': True, 'can_insert': True, 'can_update': True, 'can_delete': True},
+    'mission_critical_data': {'can_select': True, 'can_insert': True, 'can_update': True, 'can_delete': True},
   },
 }
 
@@ -105,15 +95,15 @@ async def setup_database():
             if is_empty:
                 logger.info("Database is empty. Populating with initial mock data...")
                 
-                # Default password for all mock users
-                default_password_hash = get_password_hash("password")  # Use a simple default for dev
+                # Default password for admin user
+                admin_password_hash = get_password_hash("admin123")  # Admin password
                 
                 for user in MOCK_USERS:
                     await cur.execute("""
                         INSERT INTO users (id, name, role, email, hashed_password)
                         VALUES (%s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING;
-                    """, (user['id'], user['name'], user['role'], user['email'], default_password_hash))
-                logger.info(f"Populated users table with hashed passwords. Default password is 'password'.")
+                    """, (user['id'], user['name'], user['role'], user['email'], admin_password_hash))
+                logger.info(f"Populated users table with admin user. Default password is 'admin123'.")
 
                 # Populate permissions table
                 for user_id, perms in MOCK_INITIAL_PERMISSIONS.items():
