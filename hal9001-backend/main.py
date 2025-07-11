@@ -3,6 +3,7 @@ import uvicorn
 import logging
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from typing import List, Dict
 from contextlib import asynccontextmanager
 from database import get_db_connection
@@ -154,6 +155,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Serve the UI.html file at the root
+@app.get("/", response_class=FileResponse)
+async def serve_ui():
+    """Serve the UI.html file from the parent directory."""
+    ui_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "UI.html")
+    if os.path.exists(ui_path):
+        return FileResponse(ui_path)
+    else:
+        raise HTTPException(status_code=404, detail="UI file not found")
+
+@app.get("/UI.html", response_class=FileResponse)
+async def serve_ui_direct():
+    """Serve the UI.html file directly."""
+    ui_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "UI.html")
+    if os.path.exists(ui_path):
+        return FileResponse(ui_path)
+    else:
+        raise HTTPException(status_code=404, detail="UI file not found")
 
 
 # --- Pydantic models for request validation ---

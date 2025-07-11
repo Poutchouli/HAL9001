@@ -30,5 +30,8 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Copy the application source code into the final image.
 COPY ./hal9001-backend /app
 
+# Copy the UI.html file to the parent directory where the app expects it
+COPY ./UI.html /UI.html
+
 # Command to run the application using the Uvicorn server.
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -28,6 +28,30 @@
 
         const API_BASE_URL = 'http://localhost:8001';
 
+        // Token management
+        const getToken = () => localStorage.getItem('hal9001_token');
+        const setToken = (token) => localStorage.setItem('hal9001_token', token);
+        const removeToken = () => localStorage.removeItem('hal9001_token');
+
+        // Authenticated fetch wrapper
+        const authFetch = async (url, options = {}) => {
+            const token = getToken();
+            if (!token) {
+                throw new Error('No authentication token available');
+            }
+
+            const headers = {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`,
+                ...(options.headers || {})
+            };
+
+            return fetch(url, {
+                ...options,
+                headers
+            });
+        };
+
         // Simple icon components (replacing Lucide React)
         const Database = ({ className }) => (
             <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -98,11 +122,127 @@
             </svg>
         );
 
+        // --- LOGIN COMPONENT ---
+        function LoginForm({ onLogin }) {
+            const [username, setUsername] = useState('admin');
+            const [password, setPassword] = useState('admin123');
+            const [isLoading, setIsLoading] = useState(false);
+            const [error, setError] = useState('');
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                setIsLoading(true);
+                setError('');
+
+                try {
+                    const formData = new FormData();
+                    formData.append('username', username);
+                    formData.append('password', password);
+
+                    const response = await fetch(`${API_BASE_URL}/api/v1/auth/token`, {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        throw new Error(errorData.detail || 'Login failed');
+                    }
+
+                    const data = await response.json();
+                    setToken(data.access_token);
+                    onLogin();
+                } catch (err) {
+                    setError(err.message);
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+
+            return (
+                <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+                    <div className="max-w-md w-full space-y-8 p-8 bg-white rounded-lg shadow-md">
+                        <div className="text-center">
+                            <h2 className="mt-6 text-3xl font-extrabold text-gray-900">
+                                HAL9001 Login
+                            </h2>
+                            <p className="mt-2 text-sm text-gray-600">
+                                Access the secure permissions dashboard
+                            </p>
+                        </div>
+                        <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
+                            {error && (
+                                <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded">
+                                    {error}
+                                </div>
+                            )}
+                            <div>
+                                <label htmlFor="username" className="block text-sm font-medium text-gray-700">
+                                    Username
+                                </label>
+                                <input
+                                    id="username"
+                                    type="text"
+                                    value={username}
+                                    onChange={(e) => setUsername(e.target.value)}
+                                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                                    required
+                                />
+                            </div>
+                            <div>
+                                <label htmlFor="password" className="block text-sm font-medium text-gray-700">
+                                    Password
+                                </label>
+                                <input
+                                    id="password"
+                                    type="password"
+                                    value={password}
+                                    onChange={(e) => setPassword(e.target.value)}
+                                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                                    required
+                                />
+                            </div>
+                            <button
+                                type="submit"
+                                disabled={isLoading}
+                                className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+                            >
+                                {isLoading ? 'Signing in...' : 'Sign in'}
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            );
+        }
+
         // --- MAIN APP COMPONENT ---
         function App() {
+            const [isAuthenticated, setIsAuthenticated] = useState(false);
+
+            useEffect(() => {
+                // Check if user is already logged in
+                const token = getToken();
+                if (token) {
+                    setIsAuthenticated(true);
+                }
+            }, []);
+
+            const handleLogin = () => {
+                setIsAuthenticated(true);
+            };
+
+            const handleLogout = () => {
+                removeToken();
+                setIsAuthenticated(false);
+            };
+
+            if (!isAuthenticated) {
+                return <LoginForm onLogin={handleLogin} />;
+            }
+
             return (
                 <div className="bg-gray-100 text-gray-800 font-sans min-h-screen">
-                    <Header />
+                    <Header onLogout={handleLogout} />
                     <main className="p-4 sm:p-6 lg:p-8">
                         <Dashboard />
                     </main>
@@ -111,7 +251,7 @@
         }
 
         // --- WIDGET & LAYOUT COMPONENTS ---
-        const Header = () => (
+        const Header = ({ onLogout }) => (
             <header className="bg-white shadow-sm flex items-center justify-between p-4">
                 <div className="flex items-center space-x-4">
                     <div className="bg-blue-600 p-2 rounded-lg">
@@ -135,6 +275,12 @@
                             <User className="h-5 w-5 text-gray-600"/>
                         </div>
                         <span className="text-sm font-medium hidden sm:inline">Admin User</span>
+                        <button 
+                            onClick={onLogout}
+                            className="ml-2 px-3 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200"
+                        >
+                            Logout
+                        </button>
                     </div>
                 </div>
             </header>
@@ -249,8 +395,8 @@
                         console.log('Fetching users and tables...');
                         
                         const [usersRes, tablesRes] = await Promise.all([
-                            fetch(`${API_BASE_URL}/api/v1/admin/users`),
-                            fetch(`${API_BASE_URL}/api/v1/admin/tables`)
+                            authFetch(`${API_BASE_URL}/api/v1/admin/users`),
+                            authFetch(`${API_BASE_URL}/api/v1/admin/tables`)
                         ]);
                         
                         if (!usersRes.ok || !tablesRes.ok) {
@@ -288,7 +434,7 @@
                         setError('');
                         console.log(`Fetching permissions for user: ${selectedUserId}`);
                         
-                        const res = await fetch(`${API_BASE_URL}/api/v1/admin/permissions/${selectedUserId}`);
+                        const res = await authFetch(`${API_BASE_URL}/api/v1/admin/permissions/${selectedUserId}`);
                         if (!res.ok) throw new Error(`Failed to fetch permissions for ${selectedUserId}. Status: ${res.status}`);
                         
                         const permsData = await res.json();
@@ -307,7 +453,7 @@
             const debouncedUpdate = useCallback(
                 debounce((newPerms, userId) => {
                     console.log("Sending update to API for user:", userId, newPerms[userId]);
-                    fetch(`${API_BASE_URL}/api/v1/admin/permissions`, {
+                    authFetch(`${API_BASE_URL}/api/v1/admin/permissions`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
