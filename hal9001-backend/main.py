@@ -9,6 +9,8 @@ from database import get_db_connection
 from psycopg.rows import dict_row
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from fastapi.security import OAuth2PasswordRequestForm
+from auth import get_password_hash, verify_password, create_access_token, get_current_user
 
 # Load environment variables
 load_dotenv()
@@ -74,19 +76,26 @@ async def setup_database():
             """)
             logger.info("Users table created or exists.")
 
-            # Create the permissions table
+            # Create user_table_permissions table
             await cur.execute("""
                 CREATE TABLE IF NOT EXISTS user_table_permissions (
+                    id SERIAL PRIMARY KEY,
                     user_id TEXT NOT NULL,
                     table_name TEXT NOT NULL,
                     can_select BOOLEAN DEFAULT FALSE,
                     can_insert BOOLEAN DEFAULT FALSE,
                     can_update BOOLEAN DEFAULT FALSE,
                     can_delete BOOLEAN DEFAULT FALSE,
-                    PRIMARY KEY(user_id, table_name)
+                    UNIQUE(user_id, table_name)
                 );
             """)
             logger.info("Permissions table created or exists.")
+
+            # Update users table to include hashed_password column if it doesn't exist
+            await cur.execute("""
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS hashed_password TEXT;
+            """)
+            logger.info("Users table updated with password column.")
 
             # Check if tables are empty
             await cur.execute("SELECT COUNT(*) FROM users")
@@ -95,13 +104,16 @@ async def setup_database():
 
             if is_empty:
                 logger.info("Database is empty. Populating with initial mock data...")
-                # Populate users table
+                
+                # Default password for all mock users
+                default_password_hash = get_password_hash("password")  # Use a simple default for dev
+                
                 for user in MOCK_USERS:
                     await cur.execute("""
-                        INSERT INTO users (id, name, role, email)
-                        VALUES (%s, %s, %s, %s) ON CONFLICT (id) DO NOTHING;
-                    """, (user['id'], user['name'], user['role'], user['email']))
-                logger.info(f"Populated users table with {len(MOCK_USERS)} users.")
+                        INSERT INTO users (id, name, role, email, hashed_password)
+                        VALUES (%s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING;
+                    """, (user['id'], user['name'], user['role'], user['email'], default_password_hash))
+                logger.info(f"Populated users table with hashed passwords. Default password is 'password'.")
 
                 # Populate permissions table
                 for user_id, perms in MOCK_INITIAL_PERMISSIONS.items():
@@ -109,7 +121,8 @@ async def setup_database():
                         await cur.execute("""
                             INSERT INTO user_table_permissions
                             (user_id, table_name, can_select, can_insert, can_update, can_delete)
-                            VALUES (%s, %s, %s, %s, %s, %s);
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (user_id, table_name) DO NOTHING;
                         """, (
                             user_id, table_name,
                             actions.get('can_select', False),
@@ -166,9 +179,34 @@ async def health_check():
     return {"status": "ok", "message": "HAL9001 API is online."}
 
 
+@app.post("/api/v1/auth/token", tags=["Authentication"])
+async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
+    """
+    Provides a JWT token for a valid user.
+    Uses OAuth2PasswordRequestForm, so you must send data as form-data
+    with 'username' and 'password' keys.
+    """
+    async with get_db_connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            # The 'username' from the form is the user's email
+            await cur.execute("SELECT id, hashed_password FROM users WHERE email = %s;", (form_data.username,))
+            user = await cur.fetchone()
+            
+            if not user or not verify_password(form_data.password, user['hashed_password']):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Incorrect email or password",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            
+            access_token = create_access_token(data={"sub": user['id']})
+            return {"access_token": access_token, "token_type": "bearer"}
+
+
 @app.get("/api/v1/admin/users", tags=["Admin"], summary="Get All Users")
-async def get_all_users():
+async def get_all_users(current_user_id: str = Depends(get_current_user)):
     """Retrieves a list of all users from the database."""
+    logger.info(f"User {current_user_id} accessing all users.")
     async with get_db_connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute("SELECT id, name, role, email FROM users ORDER BY name;")
@@ -176,15 +214,17 @@ async def get_all_users():
             return users
 
 @app.get("/api/v1/admin/tables", tags=["Admin"], summary="Get All Managed Tables")
-async def get_all_tables():
+async def get_all_tables(current_user_id: str = Depends(get_current_user)):
     """Returns a hardcoded list of tables that can be managed."""
+    logger.info(f"User {current_user_id} accessing all tables.")
     return MOCK_TABLES
 
 @app.get("/api/v1/admin/permissions/{user_id}", tags=["Admin"], summary="Get Permissions for a User")
-async def get_user_permissions(user_id: str):
+async def get_user_permissions(user_id: str, current_user_id: str = Depends(get_current_user)):
     """
     Retrieves a map of table permissions for a specific user.
     """
+    logger.info(f"User {current_user_id} accessing permissions for user {user_id}.")
     async with get_db_connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
@@ -203,10 +243,11 @@ async def get_user_permissions(user_id: str):
             return permissions
 
 @app.post("/api/v1/admin/permissions", tags=["Admin"], summary="Update User Permissions")
-async def update_user_permissions(update: PermissionUpdate):
+async def update_user_permissions(update: PermissionUpdate, current_user_id: str = Depends(get_current_user)):
     """
     Updates permissions for a specific user.
     """
+    logger.info(f"User {current_user_id} updating permissions for user {update.user_id}.")
     async with get_db_connection() as conn:
         async with conn.cursor() as cur:
             # First, delete existing permissions for this user

@@ -1,9 +1,8 @@
-# Web server
 fastapi
 uvicorn[standard]
-
-# PostgreSQL database driver (async)
-psycopg[binary,pool]
-
-# For reading .env files
+psycopg[binary]
+psycopg_pool
 python-dotenv
+pydantic
+passlib[bcrypt]
+python-jose[cryptography]

@@ -1,34 +1,34 @@
-FROM python:3.11-slim
+# ---- Builder Stage ----
+# Use a full Python image to install dependencies, which may require build tools.
+FROM python:3.11 as builder
 
-# Set working directory
+# Set the working directory in the container
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    postgresql-client \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+# Create and activate a virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy requirements first for better caching
-COPY hal9001-backend/requirements.txt .
+# Copy only the requirements file to leverage Docker's layer caching.
+# This layer is only rebuilt if the requirements change.
+COPY ./hal9001-backend/requirements.txt .
 
-# Install Python dependencies
+# Install the Python dependencies into the virtual environment
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY hal9001-backend/ .
 
-# Create non-root user for security
-RUN useradd --create-home --shell /bin/bash hal9001
-USER hal9001
+# ---- Final Stage ----
+# Use a lightweight "slim" image for the final production container.
+FROM python:3.11-slim
 
-# Expose port
-EXPOSE 8000
+WORKDIR /app
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/api/health || exit 1
+# Copy the virtual environment with installed packages from the builder stage.
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
-# Run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# Copy the application source code into the final image.
+COPY ./hal9001-backend /app
+
+# Command to run the application using the Uvicorn server.
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

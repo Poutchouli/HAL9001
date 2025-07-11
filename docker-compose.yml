@@ -37,8 +37,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    volumes:
-      - ./hal9001-backend:/app
+    # The volume mount is great for development for live-reloading.
+    # Comment it out to test the code baked into the Docker image itself.
+    # volumes:
+    #   - ./hal9001-backend:/app
     networks:
       - hal9001-network
       #- webportal-network  # External network for web portal integration
